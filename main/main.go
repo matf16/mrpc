@@ -1,13 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"github.com/matf16/mrpc"
-	"github.com/matf16/mrpc/codec"
-	"github.com/matf16/mrpc/option"
 	"log"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -22,24 +20,26 @@ func startServer(addr chan string) {
 }
 
 func main() {
+	log.SetFlags(0)
 	addr := make(chan string)
 	go startServer(addr)
 
-	conn, _ := net.Dial("tcp", <-addr)
-	defer func() { _ = conn.Close() }()
+	client, _ := mrpc.Dial("tcp", <-addr)
+	defer func() { _ = client.Close() }()
 
 	time.Sleep(1 * time.Second)
-	_ = json.NewEncoder(conn).Encode(option.DefaultOption)
-	cc := codec.NewGobCodec(conn)
+	var wg sync.WaitGroup
 	for i := 0; i < 5; i++ {
-		h := &codec.Header{
-			ServiceMethod: "MATF.Hello",
-			Seq:           uint64(i),
-		}
-		_ = cc.Write(h, fmt.Sprintf("mrpc req %d", h.Seq))
-		_ = cc.ReadHeader(h)
-		var reply string
-		_ = cc.ReadBody(&reply)
-		log.Println(reply)
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			args := fmt.Sprintf("mrpc req %d", i)
+			var reply string
+			if err := client.Call("MATF.HELLO", args, &reply); err != nil {
+				log.Fatal("call MATF.HELLO error", err)
+			}
+			log.Println("reply:" + reply)
+		}(i)
 	}
+	wg.Wait()
 }
