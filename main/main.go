@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"github.com/matf16/mrpc"
 	"log"
 	"net"
@@ -45,9 +46,12 @@ func main() {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
+			ctx, f := context.WithTimeout(context.Background(), time.Second)
+			defer f()
+			//
 			args := &Args{i, i * i}
 			var reply int
-			if err := client.Call("Foo.Sum", args, &reply); err != nil {
+			if err := client.Call(ctx, "Foo.Sum", args, &reply); err != nil {
 				log.Fatal("call Foo.Sum error ", err)
 			}
 			log.Printf("reply: %d + %d = %d\n", args.Num1, args.Num2, reply)

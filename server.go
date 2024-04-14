@@ -3,6 +3,7 @@ package mrpc
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/matf16/mrpc/codec"
 	"io"
 	"log"
@@ -10,18 +11,22 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 )
 
 const MagicNumber = 0x5a6b7c8d
 
 type Option struct {
-	MagicNumber int
-	CodecType   codec.Type
+	MagicNumber    int
+	CodecType      codec.Type
+	ConnectTimeout time.Duration
+	HandleTimeout  time.Duration
 }
 
 var DefaultOption = &Option{
-	MagicNumber: MagicNumber,
-	CodecType:   codec.GobType,
+	MagicNumber:    MagicNumber,
+	CodecType:      codec.GobType,
+	ConnectTimeout: 10 * time.Second,
 }
 
 type request struct {
@@ -74,12 +79,12 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 		log.Printf("rpc server: invalid codec type %s\n", opt.CodecType)
 		return
 	}
-	server.ServeCodec(f(conn))
+	server.ServeCodec(f(conn), &opt)
 }
 
 var invalidRequest = struct{}{}
 
-func (server *Server) ServeCodec(cc codec.Codec) {
+func (server *Server) ServeCodec(cc codec.Codec, opt *Option) {
 	sending := new(sync.Mutex)
 	wg := new(sync.WaitGroup)
 	for {
@@ -95,7 +100,7 @@ func (server *Server) ServeCodec(cc codec.Codec) {
 		}
 		// handle request and send back
 		wg.Add(1)
-		go server.handleRequest(cc, req, sending, wg)
+		go server.handleRequest(cc, req, sending, wg, opt.HandleTimeout)
 	}
 	wg.Wait()
 
@@ -145,16 +150,35 @@ func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interfa
 	}
 }
 
-func (server *Server) handleRequest(cc codec.Codec, r *request, sending *sync.Mutex, wg *sync.WaitGroup) {
+func (server *Server) handleRequest(cc codec.Codec, r *request, sending *sync.Mutex, wg *sync.WaitGroup, timeout time.Duration) {
 	defer wg.Done()
-	err := r.svc.call(r.mType, r.argv, r.replyv)
-	if err != nil {
-		r.h.Error = err.Error()
-		server.sendResponse(cc, r.h, invalidRequest, sending)
+	// avoid goroutine leak
+	sent := make(chan struct{}, 1)
+	called := make(chan struct{}, 1)
+	go func() {
+		err := r.svc.call(r.mType, r.argv, r.replyv)
+		called <- struct{}{}
+		if err != nil {
+			r.h.Error = err.Error()
+			server.sendResponse(cc, r.h, invalidRequest, sending)
+			sent <- struct{}{}
+			return
+		}
+		server.sendResponse(cc, r.h, r.replyv.Interface(), sending)
+		sent <- struct{}{}
+	}()
+	if timeout == 0 {
+		<-called
+		<-sent
 		return
 	}
-
-	server.sendResponse(cc, r.h, r.replyv.Interface(), sending)
+	select {
+	case <-time.After(timeout):
+		r.h.Error = fmt.Errorf("rpc server: request handle timeout: expect within %d", timeout).Error()
+		server.sendResponse(cc, r.h, invalidRequest, sending)
+	case <-called:
+		<-sent
+	}
 }
 
 func (server *Server) Register(rcvr interface{}) error {
