@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"github.com/matf16/mrpc"
 	"log"
 	"net"
@@ -9,7 +8,20 @@ import (
 	"time"
 )
 
+type Foo int
+
+type Args struct{ Num1, Num2 int }
+
+func (f Foo) Sum(args Args, reply *int) error {
+	*reply = args.Num1 + args.Num2
+	return nil
+}
+
 func startServer(addr chan string) {
+	var f Foo
+	if err := mrpc.Register(&f); err != nil {
+		log.Fatal("register error:", err)
+	}
 	l, err := net.Listen("tcp", ":0")
 	if err != nil {
 		log.Fatal("net error:", err)
@@ -33,12 +45,12 @@ func main() {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			args := fmt.Sprintf("mrpc req %d", i)
-			var reply string
-			if err := client.Call("MATF.HELLO", args, &reply); err != nil {
-				log.Fatal("call MATF.HELLO error", err)
+			args := &Args{i, i * i}
+			var reply int
+			if err := client.Call("Foo.Sum", args, &reply); err != nil {
+				log.Fatal("call Foo.Sum error ", err)
 			}
-			log.Println("reply:" + reply)
+			log.Printf("reply: %d + %d = %d\n", args.Num1, args.Num2, reply)
 		}(i)
 	}
 	wg.Wait()
