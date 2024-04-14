@@ -5,6 +5,7 @@ import (
 	"github.com/matf16/mrpc"
 	"log"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -20,24 +21,25 @@ func (f Foo) Sum(args Args, reply *int) error {
 
 func startServer(addr chan string) {
 	var f Foo
+
 	if err := mrpc.Register(&f); err != nil {
 		log.Fatal("register error:", err)
 	}
-	l, err := net.Listen("tcp", ":0")
+	l, err := net.Listen("tcp", ":9999")
 	if err != nil {
 		log.Fatal("net error:", err)
 	}
 	log.Println("start rpc server on", l.Addr())
+	mrpc.HandleHTTP()
 	addr <- l.Addr().String()
-	mrpc.Accept(l)
+	_ = http.Serve(l, nil)
 }
 
-func main() {
-	log.SetFlags(0)
-	addr := make(chan string)
-	go startServer(addr)
-
-	client, _ := mrpc.Dial("tcp", <-addr)
+func call(addr chan string) {
+	client, err := mrpc.DialHTTP("tcp", <-addr)
+	if err != nil {
+		log.Fatal("create client error: ", err)
+	}
 	defer func() { _ = client.Close() }()
 
 	time.Sleep(1 * time.Second)
@@ -58,4 +60,11 @@ func main() {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func main() {
+	log.SetFlags(0)
+	addr := make(chan string)
+	go call(addr)
+	startServer(addr)
 }
